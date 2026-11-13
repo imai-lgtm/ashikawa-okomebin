@@ -282,7 +282,7 @@ export function loadTruckTex() {
 // ---------- 景色の絵（Codex） ----------
 export function loadScenery() {
   // cone・arrowtruck・tollgate・streetlight・soundwall・fence は Codex の絵が届いたら ここへ足す（いまは 立体の代わりで 描く）
-  const names = ['car_red', 'car_white', 'car_navy', 'car_kei', 'ambulance_rear', 'ambulance_side', 'ambulance_front', 'bld1', 'bld2', 'bld3', 'bld4', 'bld5', 'bld6', 'p_vending', 'p_flower', 'p_bike', 'p_bollard', 'p_veggie', 'p_kid1', 'p_kid2', 'p_walker', 'p_post', 'p_planter', 'far', 'cloud1', 'cloud2', 'tree_round', 'pole', 'teabush', 'kid_walk', 'facade4', 'facade5'];
+  const names = ['car_red', 'car_white', 'car_navy', 'car_kei', 'ambulance_rear', 'ambulance_side', 'ambulance_front', 'wall_cream', 'wall_wood', 'wall_apt', 'roof_tile', 'school', 'walk_kg', 'walk_kb', 'bld1', 'bld2', 'bld3', 'bld4', 'bld5', 'bld6', 'p_vending', 'p_flower', 'p_bike', 'p_bollard', 'p_veggie', 'p_kid1', 'p_kid2', 'p_walker', 'p_post', 'p_planter', 'far', 'cloud1', 'cloud2', 'tree_round', 'pole', 'teabush', 'facade4', 'facade5', 'soundwall', 'streetlight', 'fence', 'cone', 'arrowtruck', 'seaview'];
   const loader = new THREE.TextureLoader();
   return Promise.all(names.map((n) => new Promise((ok) => loader.load(`img/${n}.webp`, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; ok([n, t]); }, undefined, () => ok([n, null])))))
     .then((list) => Object.fromEntries(list.filter(([, t]) => t)));
@@ -312,6 +312,18 @@ function buildCarBoard(tex, name) {
   return g;
 }
 
+// いくつかの 形を 1つに まとめる（同じ 絵の 面を 1回で 描く）
+function mergeGeos(list) {
+  const parts = list.map((g) => (g.index ? g.toNonIndexed() : g));
+  const out = new THREE.BufferGeometry();
+  for (const key of ['position', 'normal', 'uv']) {
+    if (!parts.every((g) => g.attributes[key])) continue;
+    const size = parts[0].attributes[key].itemSize; const arr = []; parts.forEach((g) => arr.push(...g.attributes[key].array));
+    out.setAttribute(key, new THREE.Float32BufferAttribute(arr, size));
+  }
+  return out;
+}
+
 // 同じ絵の板をまとめて1回で描く（list = [[x, z, 高さ], ...]）。カメラはほぼうしろから見るので、板は +z を向ける
 function boards(tex, list) {
   if (!tex || !list.length) return new THREE.Group();
@@ -332,6 +344,21 @@ function boardsAlong(tex, list, len) {
   const m = new THREE.Matrix4();
   list.forEach(([x, z, h], i) => { m.makeScale(1, h, len); m.setPosition(x, 0, z); im.setMatrixAt(i, m); });
   return im;
+}
+
+// 歩く 子ども（Codex の 4コマ絵を 順に 出す。左向き。影つき）。walker.step(dist) で 歩いた ぶん だけ コマを 進める
+function buildWalker(tex, h = 1.45) {
+  const g = new THREE.Group();
+  const t = tex.clone(); t.repeat.set(0.25, 1); t.offset.set(0, 0); t.needsUpdate = true;
+  const w = h * (tex.image.width / 4) / tex.image.height;
+  const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, alphaTest: 0.4 }));
+  m.center.set(0.5, 0); m.scale.set(w, h, 1); g.add(m);
+  const sh = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.9, w * 0.45), new THREE.MeshBasicMaterial({ map: blobTex(), transparent: true, opacity: 0.6, depthWrite: false }));
+  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; g.add(sh);
+  let acc = 0; let fr = 0;
+  g.userData.step = (d, flip) => { acc += Math.abs(d); if (acc > 0.32) { acc = 0; fr = (fr + 1) % 4; } t.offset.x = fr * 0.25; t.repeat.x = flip ? -0.25 : 0.25; if (flip) t.offset.x = fr * 0.25 + 0.25; };
+  g.userData.stand = () => { fr = 1; t.offset.x = t.repeat.x < 0 ? 0.5 : 0.25; };
+  return g;
 }
 
 // いつもこちらを向く板（下のはしが地面）
@@ -418,6 +445,7 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
   });
   scene.fog = new THREE.Fog(sky, 160, 620);
   const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 2000);
+  let baseFov = 58;
   scene.add(new THREE.HemisphereLight('#e6f4ff', '#6b7a5a', 1.3));
   const sun = new THREE.DirectionalLight('#fff4e0', 2.2);
   sun.position.set(-30, 60, 20);
@@ -514,8 +542,9 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
     const len = L.length + 160;
     const zEnd = -len;
     // 地面
+    // 高速道路は 右がわを 海に するので、地面は 道の 右はし（x＝16）まで
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(900, len + 400), mat(highway ? '#7fae6a' : '#a7b59a', { roughness: 1 }));
-    ground.rotation.x = -Math.PI / 2; ground.position.set(0, -0.02, -len / 2 + 60); world.add(ground);
+    ground.rotation.x = -Math.PI / 2; ground.position.set(highway ? -434 : 0, -0.02, -len / 2 + 60); world.add(ground);
     // 道路
     const roadW = highway ? 16 : 8;
     const roadX = highway ? -0.4 : 0;
@@ -549,16 +578,16 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       // 中央分離帯：コンクリートの台と、緑の目かくしフェンス
       const med = box(1.2, 0.8, len + 120, mat('#c9ccd1')); med.position.set(1.2, 0.4, -len / 2 + 50); world.add(med);
       if (T.fence) {
-        const fl = []; for (let z = 40; z > zEnd; z -= 8) fl.push([1.2, z, 1.6]);
-        const fence = boardsAlong(T.fence, fl, 8); world.add(fence);
+        const fl = []; for (let z = 40; z > zEnd; z -= 4.2) fl.push([1.2, z, 2.0]);
+        const fence = boardsAlong(T.fence, fl, 4.2); world.add(fence); // 中央分離帯の 目かくし フェンス
       } else { const f = box(0.08, 1.4, len + 120, mat('#3f8a52')); f.position.set(1.2, 1.5, -len / 2 + 50); world.add(f); }
       // ガードレール（左の路肩）
       const rail = mat('#e8ecef', { metalness: 0.5, roughness: 0.3 });
       const r1 = box(0.12, 0.35, len + 120, rail); r1.position.set(-10.3, 0.75, -len / 2 + 50); world.add(r1);
       // 左：高い防音壁（上は透明な板）
       if (T.soundwall) {
-        const wl = []; for (let z = 40; z > zEnd; z -= 10) wl.push([-10.6, z, 5]);
-        world.add(boardsAlong(T.soundwall, wl, 10));
+        const wl = []; for (let z = 40; z > zEnd; z -= 6.8) wl.push([-10.6, z, 5]);
+        world.add(boardsAlong(T.soundwall, wl, 6.8)); // Codex の 防音壁（1区画 6.8m）
       } else {
         const wall = box(0.3, 3.2, len + 120, mat('#b9bec6')); wall.position.set(-10.6, 1.6, -len / 2 + 50); world.add(wall);
         const glass = box(0.1, 1.6, len + 120, new THREE.MeshLambertMaterial({ color: '#cfe9ff', transparent: true, opacity: 0.45 })); glass.position.set(-10.6, 4.0, -len / 2 + 50); world.add(glass);
@@ -566,10 +595,14 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       // 右の奥：駿河湾（反対車線の向こう）
       const sea = new THREE.Mesh(new THREE.PlaneGeometry(800, len + 400), mat('#2f7fd1', { roughness: 0.25, metalness: 0.1 }));
       sea.rotation.x = -Math.PI / 2; sea.position.set(418, -0.6, -len / 2 + 60); world.add(sea);
+      // 海と 道の あいだの 岩の 護岸
+      const bank = new THREE.Mesh(new THREE.PlaneGeometry(8, len + 400), mat('#b7b2a6', { roughness: 1 })); bank.rotation.x = -Math.PI / 2; bank.rotation.y = -0.18; bank.position.set(19.5, -0.3, -len / 2 + 60); world.add(bank);
       const r2 = box(0.12, 0.35, len + 120, rail); r2.position.set(11.3, 0.75, -len / 2 + 50); world.add(r2);
       // 背の高い街灯
       const lights = []; for (let z = 20; z > zEnd; z -= 36) lights.push([-9.8, z, 11]);
       if (T.streetlight) world.add(boards(T.streetlight, lights));
+      // 右の 遠く：駿河湾と 海ぞいの 町（Codex の 遠景を 道ぞいに）
+      if (T.seaview) { const sv = []; for (let z = 60; z > zEnd - 200; z -= 64) sv.push([210, z, 26]); world.add(boardsAlong(T.seaview, sv, 64)); }
       else for (const [x, z] of lights) { const pole = box(0.25, 10, 0.25, mat('#9aa1aa')); pole.position.set(x, 5, z); world.add(pole); const arm = box(2.4, 0.18, 0.18, mat('#9aa1aa')); arm.position.set(x + 1.2, 10, z); world.add(arm); }
       // 頭の上の緑の案内標識（門型）
       const signs = [[60, '清水 しみず', 'SHIMIZU 7km'], [250, '富士 ふじ', 'FUJI 2km'], [430, '富士 出口', 'EXIT  ETC']];
@@ -607,59 +640,93 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       const slots = [];
       if (bk.length) {
         const per = bk.map(() => []);
-        for (let z = 30; z > zEnd + 20; z -= 7.9) {
+        for (let z = 30; z > zEnd + 20; z -= 8.6) {
           for (const side of [-1, 1]) {
             if (tea && side === -1) continue;
             if (leg.bridgeAt && Math.abs(-z - leg.bridgeAt) < 24) continue;
+            if (side === -1 && z < -(L.length) + 58 && z > -(L.length) - 22) continue; // ゴールの お店と その 手前（駐車場）は あける（お店の 看板が うもれない）
+            if (side === -1 && (L.zones || []).some((zn) => -z > zn.from - 4 && -z < zn.until + 8)) continue; // 小学校の 前は 学校に する
             const k = Math.floor(rand(z, side) * bk.length);
             per[k].push({ side, z, sd: rand(z, side + 3) }); slots.push({ side, z, k });
           }
         }
         const q = new THREE.Quaternion(); const v = new THREE.Vector3(); const sc = new THREE.Vector3(); const m = new THREE.Matrix4();
         const fGeo = new THREE.PlaneGeometry(1, 1); fGeo.translate(0, 0.5, 0);
-        // 1棟ずつ：正面の絵を 軒の線で 上下に 切り、屋根の部分だけ うしろへ たおす（たてた 紙に 見えない）。
-        //   EAVE＝上から 屋根の 部分の わりあい（0 は たおさない：三角の 屋根を 正面に 見せる家・平らな 屋上の アパート）
-        const EAVE = { bld1: 0.18, bld2: 0.19, bld3: 0, bld4: 0.2, bld5: 0, bld6: 0.18 };
-        const W = 7.4; // 建物の はば（戸の 高さが 約2mに なる 大きさ）
+        // 1棟ずつ 立体に 組む（ハリボテに 見えないように）：
+        //   道に 向いた面＝Codex の 店や 家の 正面の 絵（屋根の 下＝かべの 部分だけ）
+        //   カメラに 向く 横の かべ＝Codex の 横かべの 絵（しっくい・木・アパート）
+        //   屋根＝瓦の 絵を はった 本物の 三角の 屋根（棟は 道と 平行。のき が 少し 出る）。アパートは 平らな 屋上
+        //   EAVE＝正面の 絵の 上から 屋根の 部分の わりあい（そこから 下を かべに 使う）
+        const EAVE = { bld1: 0.18, bld2: 0.19, bld3: 0.07, bld4: 0.2, bld5: 0.21, bld6: 0.18 };
+        const SIDE = { bld1: 'wall_cream', bld2: 'wall_cream', bld3: 'wall_apt', bld4: 'wall_wood', bld5: 'wall_cream', bld6: 'wall_cream' };
+        const GABLE = { wall_cream: '#f1e6cc', wall_wood: '#6e4c33', wall_apt: '#f2f2ef' };
+        const W = 7.4; // 建物の はば（道ぞい。戸の 高さが 約2mに なる 大きさ）
+        const Q0 = new THREE.Quaternion();
+        const roofTex = T.roof_tile ? (() => { const t = T.roof_tile.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.needsUpdate = true; return t; })() : null;
         per.forEach((list, k) => {
           if (!list.length) return;
-          const name = bk[k]; const tex = T[name]; const a = tex.image.width / tex.image.height; const hgt = W / a;
-          const e = EAVE[name] || 0; const hWall = hgt * (1 - e); const hRoof = hgt * e; const tilt = 0.95;
-          const mkPlane = (h, v0, v1) => { const gg = new THREE.PlaneGeometry(W, h); gg.translate(0, h / 2, 0); const uv = gg.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, v0 + uv.getY(i) * (v1 - v0)); return gg; };
-          const wallGeo = mkPlane(hWall, 0, 1 - e);
-          const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-          const walls = new THREE.InstancedMesh(wallGeo, mat, list.length);
-          let roofs = null;
-          if (e > 0) { const rg = mkPlane(hRoof, 1 - e, 1); rg.rotateX(-tilt); rg.translate(0, hWall, 0); roofs = new THREE.InstancedMesh(rg, mat, list.length); }
-          const dep = 7; const top = new THREE.MeshLambertMaterial({ color: '#58606c' }); const sideM = new THREE.MeshLambertMaterial({ color: name === 'bld4' ? '#9a7a56' : '#efe6d2' });
-          const boxes = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), [sideM, sideM, top, sideM, sideM, sideM], list.length);
+          const name = bk[k]; const tex = T[name]; tex.anisotropy = 8;
+          const a = tex.image.width / tex.image.height; const hgt = W / a;
+          const e = EAVE[name] || 0; const hWall = hgt * (1 - e);
+          const flat = name === 'bld3';
+          const D = flat ? 8.5 : 6.6; // 奥ゆき
+          const sideTex = T[SIDE[name]]; if (sideTex) sideTex.anisotropy = 8;
+          // 正面（ローカルで x＝-D/2、-x を 向く）
+          const fg = new THREE.PlaneGeometry(W, hWall); fg.translate(0, hWall / 2, 0);
+          { const uv = fg.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * (1 - e)); }
+          fg.rotateY(-Math.PI / 2); fg.translate(-D / 2, 0, 0);
+          const fronts = new THREE.InstancedMesh(fg, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5 }), list.length);
+          // 横の かべ 2まい（±z）
+          const sg1 = new THREE.PlaneGeometry(D, hWall); sg1.translate(0, hWall / 2, W / 2);
+          const sg2 = new THREE.PlaneGeometry(D, hWall); sg2.rotateY(Math.PI); sg2.translate(0, hWall / 2, -W / 2);
+          const sideGeo = mergeGeos([sg1, sg2]);
+          const sides = new THREE.InstancedMesh(sideGeo, sideTex ? new THREE.MeshLambertMaterial({ map: sideTex }) : new THREE.MeshLambertMaterial({ color: '#efe6d2' }), list.length);
+          // うしろの かべ（すけない ように）
+          const bg = new THREE.PlaneGeometry(W, hWall); bg.rotateY(Math.PI / 2); bg.translate(D / 2, hWall / 2, 0);
+          const backs = new THREE.InstancedMesh(bg, new THREE.MeshLambertMaterial({ color: GABLE[SIDE[name]] || '#efe6d2' }), list.length);
+          // 屋根
+          let roofs = null; let gables = null;
+          if (flat) {
+            const rg = new THREE.PlaneGeometry(D, W); rg.rotateX(-Math.PI / 2); rg.translate(0, hWall + 0.02, 0);
+            roofs = new THREE.InstancedMesh(rg, new THREE.MeshLambertMaterial({ color: '#9aa0a8' }), list.length);
+          } else {
+            const ov = 0.45; const rise = (D / 2 + ov) * 0.5; const slopeL = Math.hypot(D / 2 + ov, rise); const L2 = W + ov * 2;
+            const slope = (dir) => { const g = new THREE.PlaneGeometry(slopeL, L2); g.rotateX(-Math.PI / 2); g.rotateZ(dir * Math.atan2(rise, D / 2 + ov)); g.translate(dir * -(D / 2 + ov) / 2, hWall - 0.15 + rise / 2, 0);
+              const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * slopeL / 2.2, uv.getY(i) * L2 / 2.6); return g; };
+            roofs = new THREE.InstancedMesh(mergeGeos([slope(1), slope(-1)]), roofTex ? new THREE.MeshLambertMaterial({ map: roofTex, side: THREE.DoubleSide }) : new THREE.MeshLambertMaterial({ color: '#4c5560', side: THREE.DoubleSide }), list.length);
+            // 妻（屋根の 下の 三角）
+            const tri = new THREE.BufferGeometry(); const y0 = hWall - 0.15; const y1 = y0 + rise * (D / 2) / (D / 2 + ov);
+            tri.setAttribute('position', new THREE.Float32BufferAttribute([-D / 2, y0, W / 2, D / 2, y0, W / 2, 0, y1, W / 2, D / 2, y0, -W / 2, -D / 2, y0, -W / 2, 0, y1, -W / 2], 3)); tri.computeVertexNormals();
+            gables = new THREE.InstancedMesh(tri, new THREE.MeshLambertMaterial({ color: GABLE[SIDE[name]] || '#efe6d2', side: THREE.DoubleSide }), list.length);
+          }
           list.forEach(({ side, z, sd }, i) => {
-            const fx = side * (7.4 + sd * 0.4);
-            q.setFromAxisAngle(v.set(0, 1, 0), side < 0 ? Math.PI / 2 : -Math.PI / 2);
-            m.compose(v.set(fx, 0, z), q, sc.set(1, 1, 1)); walls.setMatrixAt(i, m); if (roofs) roofs.setMatrixAt(i, m);
-            const bh = e > 0 ? hWall : hgt * (name === 'bld3' ? 0.9 : 0.62);
-            m.compose(v.set(fx + side * (dep / 2 + 0.02), bh / 2, z), q.identity(), sc.set(dep, bh, W * 0.96)); boxes.setMatrixAt(i, m);
+            const cx = side * (7.4 + D / 2 + sd * 0.4);
+            const q = side < 0 ? new THREE.Quaternion().setFromAxisAngle(v.set(0, 1, 0), Math.PI) : Q0;
+            m.compose(v.set(cx, 0, z), q, sc.set(1, 1, 1));
+            fronts.setMatrixAt(i, m); sides.setMatrixAt(i, m); backs.setMatrixAt(i, m); if (roofs) roofs.setMatrixAt(i, m); if (gables) gables.setMatrixAt(i, m);
           });
-          world.add(boxes, walls); if (roofs) world.add(roofs);
+          world.add(fronts, sides, backs); if (roofs) world.add(roofs); if (gables) world.add(gables);
         });
       }
       // 標識・信号の 手前（カメラがわ）には 木や 電柱を 立てない（標識が かくれない ように）
       const signSpots = [];
       for (const hh of (L.hazards || [])) { if (hh.type === 'walker') signSpots.push([-1, -(hh.at + NOSE) + 6]); if (hh.type === 'signal') signSpots.push([1, -(hh.at + NOSE) - 4]); }
       for (const zn of (L.zones || [])) signSpots.push([-1, -(zn.from + NOSE) + 6]);
-      const hidesSign = (side, zt) => signSpots.some(([sd, sz]) => sd === side && zt - sz > -5 && zt - sz < 26);
+      const inSchool = (side, zt) => side === -1 && (L.zones || []).some((zn) => -zt > zn.from - 6 && -zt < zn.until + 6);
+      const nearShop = (side, zt) => side === -1 && !highway && (legId === 'leg1' || legId === 'local') && zt < -(L.length) + 58 && zt > -(L.length) - 22;
+      const hidesSign = (side, zt) => inSchool(side, zt) || nearShop(side, zt) || signSpots.some(([sd, sz]) => sd === side && zt - sz > -5 && zt - sz < 26);
       // 街路樹（歩道の 車道がわ）と 影
       const trees = []; const shadows = [];
-      for (let z = 22; z > zEnd; z -= 18) for (const side of [-1, 1]) { if (rand(z, side + 7) < 0.25 || hidesSign(side, z - 6)) continue; trees.push([side * 4.6, z - 6, 4.4]); shadows.push([side * 4.6 + 0.5, z - 6 + 0.6, 2.8, 2.2]); }
+      for (let z = 22; z > zEnd; z -= 18) for (const side of [-1, 1]) { if (rand(z, side + 7) < 0.25 || hidesSign(side, z - 6)) continue; trees.push([side * 6.3, z - 6, 4.4]); shadows.push([side * 6.3 + 0.5, z - 6 + 0.6, 2.8, 2.2]); } // 木は 歩道の 外がわ（絵の はばが 4mあるので、車道がわに 置くと 標識に かぶる）
       world.add(boards(T.tree_round, trees));
       // 電柱（両がわ）と、電線（たるませて 3本ずつ）
       const poles = []; const poleZ = [];
       for (let z = 14; z > zEnd - 20; z -= 26) poleZ.push(z);
-      for (const side of [-1, 1]) for (const z of poleZ) { if (hidesSign(side, z)) continue; poles.push([side * 4.25, z, 8.6]); shadows.push([side * 4.25 + 0.52 * 3.2, z + 0.85 * 3.2, 0.4, 6.4]); }
+      for (const side of [-1, 1]) for (const z of poleZ) { if (hidesSign(side, z)) continue; poles.push([side * 5.0, z, 8.6]); shadows.push([side * 5.0 + 0.52 * 3.2, z + 0.85 * 3.2, 0.4, 6.4]); }
       world.add(boards(T.pole, poles));
       const wpts = [];
       for (const side of [-1, 1]) for (let wi = 0; wi < 3; wi++) {
-        const y0 = 8.55 - wi * 0.42; const x0 = side * (4.25 + (wi - 1) * 0.35);
+        const y0 = 8.55 - wi * 0.42; const x0 = side * (5.0 + (wi - 1) * 0.35);
         for (let i = 0; i < poleZ.length - 1; i++) {
           const za = poleZ[i]; const zb = poleZ[i + 1]; const N = 8;
           if (hidesSign(side, za) || hidesSign(side, zb)) continue; // 立てなかった 電柱には 電線も かけない
@@ -670,14 +737,16 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         }
       }
       // 道を よこぎる 電線（ときどき。カメラの 上を とおる高さ）
-      for (let i = 1; i < poleZ.length; i += 3) { const z = poleZ[i]; for (let j = 0; j < 8; j++) { const t0 = j / 8; const t1 = (j + 1) / 8; wpts.push(-4.25 + 8.5 * t0, 9.4 - Math.sin(Math.PI * t0) * 0.5, z, -4.25 + 8.5 * t1, 9.4 - Math.sin(Math.PI * t1) * 0.5, z); } }
+      for (let i = 1; i < poleZ.length; i += 3) { const z = poleZ[i]; for (let j = 0; j < 8; j++) { const t0 = j / 8; const t1 = (j + 1) / 8; wpts.push(-5.0 + 10 * t0, 9.4 - Math.sin(Math.PI * t0) * 0.5, z, -5.0 + 10 * t1, 9.4 - Math.sin(Math.PI * t1) * 0.5, z); } }
       const wg = new THREE.BufferGeometry(); wg.setAttribute('position', new THREE.Float32BufferAttribute(wpts, 3));
       const wires = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: '#2b2f36', transparent: true, opacity: 0.8 })); wires.userData.noOcclude = true; world.add(wires);
       // 道ばたの物（建物の前の 歩道に）：自動販売機・植木鉢・自転車・植木・ポスト・八百屋の台、車止め
       const props = { p_vending: [], p_flower: [], p_bike: [], p_planter: [], p_post: [], p_veggie: [], p_bollard: [] };
       const PH = { p_vending: 2.1, p_flower: 1.0, p_bike: 1.2, p_planter: 1.15, p_post: 1.5, p_veggie: 1.25, p_bollard: 0.95 };
+      const lastVend = { '-1': 1e9, '1': 1e9 };
       for (const { side, z, k } of slots) {
-        const r1 = rand(z, side + 11); const r2 = rand(z, side + 13);
+        let r1 = rand(z, side + 11); const r2 = rand(z, side + 13);
+        if (r1 < 0.28) { if (lastVend[side] - z < 40) r1 = 0.4; else lastVend[side] = z; } // 自動販売機は つづけて ならべない
         const x = side * 6.6;
         if (k === 0) props.p_veggie.push([x, z + 1.5, PH.p_veggie]);
         else if (r1 < 0.28) props.p_vending.push([x, z + 3.5, PH.p_vending]);
@@ -685,14 +754,15 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         else if (r1 < 0.62) props.p_post.push([x - side * 0.3, z + 2, PH.p_post]);
         if (r2 < 0.45) props.p_flower.push([x, z - 3.6, PH.p_flower]);
         else if (r2 < 0.7) props.p_planter.push([x, z + 0.4, PH.p_planter]);
-        if (r2 > 0.82) props.p_bollard.push([side * 4.4, z, PH.p_bollard]);
+        if (r2 > 0.82) props.p_bollard.push([side * 4.25, z, PH.p_bollard]);
       }
       for (const [n, list] of Object.entries(props)) if (T[n] && list.length) { world.add(boards(T[n], list)); list.forEach(([x, z, hh]) => shadows.push([x + 0.2, z + 0.25, hh * 0.9, hh * 0.55])); }
       // 歩く人（登校する小学生・犬の散歩）：ゆっくり 歩いている
       walkers = [];
-      if (T.p_kid1 && T.p_kid2) for (let i = 0; i < 4; i++) {
-        const z0 = -(30 + i * 62 + rand(i, 21) * 20); const sideX = i % 2 ? 5.9 : -5.9;
-        for (const [n, dx] of [['p_kid1', -0.35], ['p_kid2', 0.35]]) { const sp = sprite(T[n], 1.35, sideX + dx, z0); world.add(sp); walkers.push({ o: sp, v: 1.1 }); }
+      // 歩道を 歩く 小学生（コマ絵で 足を 動かす。進む 向きに 合わせて 左右を 反転）
+      if (T.p_kid1 && T.p_kid2) for (let i = 0; i < 3; i++) { // 登校する 子（うしろ姿で 奥へ 歩く）
+        const z0 = -(40 + i * 85 + rand(i, 21) * 20); const sideX = i % 2 ? 5.9 : -5.9;
+        const sp = sprite(T[i % 2 ? 'p_kid2' : 'p_kid1'], 1.35, sideX, z0); world.add(sp); walkers.push({ o: sp, v: 0.9 });
       }
       if (T.p_walker) for (let i = 0; i < 3; i++) {
         const geo = new THREE.PlaneGeometry(1, 1); geo.translate(0, 0.5, 0);
@@ -721,8 +791,8 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         const bank = new THREE.Mesh(new THREE.PlaneGeometry(400, 44), mat('#c9c0a2')); bank.rotation.x = -Math.PI / 2; bank.position.set(0, -0.4, bz); world.add(bank);
         for (const x of [-4.4, 4.4]) { const r = box(0.15, 1.0, 36, mat('#9bb8d6', { metalness: 0.4 })); r.position.set(x, 0.6, bz); world.add(r); }
         const bs = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 1.4), new THREE.MeshBasicMaterial({ map: textTex('安倍川', { w: 512, h: 200, bg: '#2156a8', fg: '#fff', size: 96, border: '#fff', sub: 'あべかわ' }) }));
-        bs.position.set(-4.6, 2.6, bz + 19); world.add(bs);
-        const bsp = box(0.12, 2.0, 0.12, mat('#8a9099')); bsp.position.set(-4.6, 1.0, bz + 19.05); world.add(bsp);
+        bs.position.set(-4.15, 2.6, bz + 19); world.add(bs); bs.userData.sign = true;
+        const bsp = box(0.12, 2.0, 0.12, mat('#8a9099')); bsp.position.set(-4.15, 1.0, bz + 19.05); world.add(bsp);
       }
     }
     // ゴールの建物
@@ -743,7 +813,7 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       if (T[`facade${shop[2]}`]) { const f = new THREE.Mesh(new THREE.PlaneGeometry(12, 8.4), new THREE.MeshLambertMaterial({ map: T[`facade${shop[2]}`] })); f.position.set(-12.5, 4.2, goalZ - 3.48); world.add(f);
         const f2 = new THREE.Mesh(new THREE.PlaneGeometry(9, 8.4), f.material); f2.rotation.y = Math.PI / 2; f2.position.set(-6.48, 4.2, goalZ - 8); world.add(f2); }
       const gs = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.9), new THREE.MeshBasicMaterial({ map: textTex(shop[0], { w: 512, h: 140, bg: shop[1], fg: '#fff', size: 96 }) }));
-      gs.position.set(-12.5, 9.5, goalZ - 3.4); world.add(gs);
+      gs.position.set(-12.5, 9.5, goalZ - 3.4); world.add(gs); gs.userData.sign = true;
     }
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(highway ? 7 : 3.7, 0.5), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
     flag.rotation.x = -Math.PI / 2; flag.position.set(laneX + (highway ? 1.8 : 0), 0.03, goalZ); world.add(flag);
@@ -751,20 +821,24 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
     const allH = [...L.hazards, ...(L.goal ? [L.goal] : [])];
     for (const h of allH) {
       // h.at は「トラックの位置（車体のまん中）」が止まる所。線や横断歩道は、鼻先（NOSE m 前）の すぐ先に かく
-      const z = -(h.at + (h.type === 'car' || h.type === 'jam' ? 0 : NOSE));
+      const z = -(h.at + (h.type === 'car' || h.type === 'jam' ? 0 : h.type === 'walker' ? NOSE + 8 : NOSE)); // 横断歩道は 止まる 線の 8m 先（子どもが トラックの 荷台に かくれない）
       const stop = new THREE.Mesh(new THREE.PlaneGeometry(highway ? 7 : 3.7, 0.45), lineMat);
-      stop.rotation.x = -Math.PI / 2; stop.position.set(laneX + (highway ? 1.8 : 0), 0.025, z);
+      stop.rotation.x = -Math.PI / 2; stop.position.set(laneX + (highway ? 1.8 : 0), 0.025, h.type === 'walker' ? z + 8 : z); // 止まる 線は トラックの 鼻先
       if (h.type === 'signal' || h.type === 'walker') world.add(stop);
       const item = { h, objs: {} };
       if (h.type === 'signal') {
-        const sig = buildSignal(); sig.position.set(1.0 + 3, 0, z - 4); world.add(sig); item.objs.sig = sig; setSignal(sig, 0);
+        const sig = buildSignal(); sig.position.set(1.0 + 3, 0, z - 4); world.add(sig); sig.userData.sign = true; item.objs.sig = sig; setSignal(sig, 0);
         const cross = new THREE.Group();
         for (let x = -3.5; x <= 3.5; x += 1.0) { const st = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 3), lineMat); st.rotation.x = -Math.PI / 2; st.position.set(x, 0.022, z - 2.5); cross.add(st); }
         world.add(cross);
       } else if (h.type === 'walker') {
         for (let x = -3.5; x <= 3.5; x += 1.0) { const st = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 3.2), lineMat); st.rotation.x = -Math.PI / 2; st.position.set(x, 0.022, z - 2.6); world.add(st); }
         const kidTex = T.kid_walk && (() => { const t = T.kid_walk.clone(); t.wrapS = THREE.RepeatWrapping; t.repeat.x = -1; t.offset.x = 1; t.needsUpdate = true; return t; })(); // 左向きに 反転
-        const kid = kidTex ? sprite(kidTex, 1.6, 5.4, z - 2.6) : buildKid(); if (!T.kid_walk) { kid.position.set(5.4, 0.18, z - 2.6); kid.rotation.y = Math.PI / 2; } world.add(kid); item.objs.kid = kid;
+        const wtex = T[(Math.floor(h.at) % 2) ? 'walk_kb' : 'walk_kg'];
+        let kid;
+        if (wtex) { kid = buildWalker(wtex, 1.9); kid.position.set(5.4, 0.18, z - 2.6); } // 横断歩道の 子は 少し 大きく（見える ように）
+        else { kid = kidTex ? sprite(kidTex, 1.6, 5.4, z - 2.6) : buildKid(); if (!T.kid_walk) { kid.position.set(5.4, 0.18, z - 2.6); kid.rotation.y = Math.PI / 2; } }
+        world.add(kid); item.objs.kid = kid;
         const ps = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), new THREE.MeshBasicMaterial({ map: canvasTex(128, 128, (c, w, h) => {
           c.fillStyle = '#1c63c9'; c.fillRect(0, 0, w, h); c.strokeStyle = '#fff'; c.lineWidth = 6; c.strokeRect(6, 6, w - 12, h - 12);
           c.fillStyle = '#fff'; c.beginPath(); c.moveTo(64, 16); c.lineTo(114, 108); c.lineTo(14, 108); c.closePath(); c.fill();
@@ -772,8 +846,8 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
           c.strokeStyle = '#1c63c9'; c.lineWidth = 7; c.lineCap = 'round'; c.beginPath(); c.moveTo(64, 56); c.lineTo(60, 78); c.lineTo(48, 96); c.moveTo(60, 78); c.lineTo(74, 96); c.moveTo(52, 64); c.lineTo(76, 68); c.stroke();
           c.fillStyle = '#1c63c9'; for (let x = 30; x < 100; x += 14) c.fillRect(x, 100, 8, 6);
         }) }));
-        ps.position.set(-4.4, 2.6, z + 6); world.add(ps);
-        const psp = box(0.1, 2.2, 0.1, mat('#8a9099')); psp.position.set(-4.4, 1.1, z + 6.05); world.add(psp);
+        ps.position.set(-4.15, 2.6, z + 6); world.add(ps); ps.userData.sign = true;
+        const psp = box(0.1, 2.2, 0.1, mat('#8a9099')); psp.position.set(-4.15, 1.1, z + 6.05); world.add(psp);
       } else if (h.type === 'goal') {
         const gl = new THREE.Mesh(new THREE.PlaneGeometry(3.7, 0.6), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
         gl.rotation.x = -Math.PI / 2; gl.position.set(laneX, 0.03, z); world.add(gl);
@@ -783,6 +857,9 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         // 料金所（ETC）：屋根はカメラより上（9m）。島（ブース）のあいだが車線。バーは 止まったトラックの鼻先より 前
         const g = new THREE.Group();
         const zb = -(h.at + NOSE + 0.9); // バーの位置
+        // ゆっくりの 線（ここを こえるとき 20キロ いか）と「ゆっくり」の 文字
+        { const zl = -(h.at - config.drive.etcCheck + NOSE); const ln = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 0.55), new THREE.MeshBasicMaterial({ color: '#ffffff' })); ln.rotation.x = -Math.PI / 2; ln.position.set(-3.6, 0.034, zl); g.add(ln);
+          const tx = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 1.4), new THREE.MeshBasicMaterial({ map: textTex('ゆっくり', { w: 512, h: 224, bg: 'rgba(0,0,0,0)', fg: '#ffffff', size: 120 }), transparent: true, depthWrite: false })); tx.rotation.x = -Math.PI / 2; tx.position.set(-5.4, 0.036, zl + 4); g.add(tx); }
         const lanesX = [-9.0, -5.4, -1.8];
         const roofMat = mat('#eef1f4');
         const roof = box(15.4, 0.7, 13, roofMat); roof.position.set(-5.4, 9.6, zb - 4); g.add(roof);
@@ -843,20 +920,33 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       const green = new THREE.Mesh(new THREE.PlaneGeometry(3.4, zl), new THREE.MeshBasicMaterial({ color: '#3f9a5c', transparent: true, opacity: 0.75, depthWrite: false }));
       green.rotation.x = -Math.PI / 2; green.position.set(laneX, 0.021, (z0 + z1) / 2); world.add(green);
       const paint = (t, size, zz, w, hh) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), new THREE.MeshBasicMaterial({ map: textTex(t, { w: 512, h: 256, bg: 'rgba(0,0,0,0)', fg: '#ffffff', size }), transparent: true, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.set(laneX, 0.03, zz); world.add(m); };
+      { const ln = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.5), new THREE.MeshBasicMaterial({ color: '#ffffff' })); ln.rotation.x = -Math.PI / 2; ln.position.set(laneX, 0.032, z0); world.add(ln); } // ゆっくりの 線（ここを こえるとき 30キロ いか）
       paint('30', 220, z0 - 4, 2.6, 1.3);
       paint('スクールゾーン', 82, z0 - 9, 3.2, 1.6);
       paint('30', 220, (z0 + z1) / 2, 2.6, 1.3);
       const s30 = new THREE.Mesh(new THREE.CircleGeometry(0.7, 32), new THREE.MeshBasicMaterial({ map: canvasTex(128, 128, (c) => { c.fillStyle = '#fff'; c.beginPath(); c.arc(64, 64, 62, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#d8262c'; c.lineWidth = 16; c.beginPath(); c.arc(64, 64, 54, 0, Math.PI * 2); c.stroke(); c.fillStyle = '#1b3b8f'; c.font = `900 64px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('30', 64, 68); }) }));
-      s30.position.set(-4.4, 3.1, z0 + 6); world.add(s30);
+      s30.position.set(-4.15, 3.1, z0 + 6); world.add(s30); s30.userData.sign = true;
       const sz = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.75), new THREE.MeshBasicMaterial({ map: textTex('スクールゾーン', { w: 320, h: 160, bg: '#1c63c9', fg: '#fff', size: 44, border: '#fff', sub: '7:30〜8:30' }) }));
-      sz.position.set(-4.4, 2.05, z0 + 6.01); world.add(sz);
-      const szp = box(0.1, 3.0, 0.1, mat('#8a9099')); szp.position.set(-4.4, 1.5, z0 + 5.95); world.add(szp);
+      sz.position.set(-4.15, 2.05, z0 + 6.01); world.add(sz); sz.userData.sign = true;
+      const szp = box(0.1, 3.0, 0.1, mat('#8a9099')); szp.position.set(-4.15, 1.5, z0 + 5.95); world.add(szp);
+      // 小学校の 校舎（Codex の 絵）：フェンスの 奥に 校庭を はさんで 建つ。横の かべ と 屋上も つける
+      if (T.school) {
+        const sw = Math.min(30, zl * 0.55); const shh = sw * T.school.image.height / T.school.image.width; const sx = -11.5; const szc = z0 - zl * 0.5; const dep = 9;
+        T.school.anisotropy = 8;
+        const face = new THREE.Mesh(new THREE.PlaneGeometry(sw, shh), new THREE.MeshBasicMaterial({ map: T.school, transparent: true, alphaTest: 0.5 }));
+        face.rotation.y = Math.PI / 2; face.position.set(sx, shh / 2, szc); world.add(face);
+        const body = box(dep, shh * 0.78, sw * 0.96, new THREE.MeshLambertMaterial({ color: '#f3f1ea' })); body.position.set(sx - dep / 2 - 0.05, shh * 0.39, szc); world.add(body);
+        if (T.wall_apt) { const sideM = new THREE.MeshLambertMaterial({ map: T.wall_apt }); const sp = new THREE.Mesh(new THREE.PlaneGeometry(dep, shh * 0.78), sideM); sp.position.set(sx - dep / 2, shh * 0.39, szc + sw * 0.48 + 0.02); world.add(sp); }
+        // 校庭（土の 色）
+        const yard = new THREE.Mesh(new THREE.PlaneGeometry(4.4, zl), new THREE.MeshLambertMaterial({ color: '#d8c49a' })); yard.rotation.x = -Math.PI / 2; yard.position.set(-9.3, 0.01, z0 - zl / 2); world.add(yard);
+      }
       // 学校のフェンス（左の歩道の外）と、門の看板
       const fence = box(0.08, 1.6, zl, mat('#3f8f5a')); fence.position.set(-7.05, 0.8, (z0 + z1) / 2); world.add(fence);
       const gate = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.1), new THREE.MeshBasicMaterial({ map: textTex('しょうがっこう', { w: 512, h: 134, bg: '#fffef6', fg: '#1d4f2e', size: 74, border: '#1d4f2e' }) }));
-      gate.rotation.y = Math.PI / 2; gate.position.set(-7.0, 2.4, z0 - zl * 0.35); world.add(gate);
+      gate.rotation.y = Math.PI / 2; gate.position.set(-7.0, 2.4, z0 - zl * 0.35); world.add(gate); gate.userData.sign = true;
       // 歩道を歩く子どもたち（左の歩道）
-      if (T.kid_walk) { const kids = []; for (let k = 0; k < 5; k++) kids.push([-5.0 - (k % 2) * 0.6, z0 - 8 - k * (zl - 12) / 4, 1.45]); world.add(boards(T.kid_walk, kids)); }
+      // 歩道の 子ども：同じ 子を ならべず、ちがう 子を 2組だけ（ゆっくり 歩く）
+      for (const [n, dz, x] of [['p_kid1', 10, -5.3], ['p_kid2', zl * 0.55, -5.8]]) if (T[n]) { const sp = sprite(T[n], 1.35, x, z0 - dz); world.add(sp); walkers.push({ o: sp, v: 0.8 }); }
     }
 
     // 高速の車線の合図：工事のカラーコーンと矢印板の車、合流の車と合流車線
@@ -881,7 +971,7 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
           pts.forEach(([x, z], i) => { m4c.makeTranslation(x, 0, z); bm.setMatrixAt(i, m4c); }); world.add(bm);
         }
         let ab;
-        if (T.arrowtruck) ab = sprite(T.arrowtruck, 3.0, lx, z - 8);
+        if (T.arrowtruck) { let at = T.arrowtruck; if (R) { at = at.clone(); at.wrapS = THREE.RepeatWrapping; at.repeat.x = -1; at.offset.x = 1; at.needsUpdate = true; } ab = sprite(at, 3.2, lx, z - 8); } // 右の 工事は ← に 反転
         else {
           // 絵がないときの代わり：白い作業車の上に、黒い板に オレンジの光る矢印（→）の 標識車
           ab = new THREE.Group();
@@ -1005,8 +1095,10 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         // 右の歩道から 左へ わたる（カメラは トラックの右うしろなので、右から来ると よく見える）
         let x = 5.4;
         if (h.cleared) { h._done = (h._done || 0) + dt; x = Math.max(-6.2, -5.1 - h._done * 2.2); } else if (h.active) x = 5.4 - Math.min(1, (h.stopT || 0) / h.wait) * 9 - 1.5;
+        const dx = x - k.position.x;
         k.position.x = x;
-        k.position.y = 0.05 + Math.abs(Math.sin(time * 9)) * (h.active || (h.cleared && x > -6.2) ? 0.06 : 0);
+        if (k.userData.step) { if (Math.abs(dx) > 0.0005) k.userData.step(dx, false); else k.userData.stand(); k.position.y = 0.18; }
+        else k.position.y = 0.05 + Math.abs(Math.sin(time * 9)) * (h.active || (h.cleared && x > -6.2) ? 0.06 : 0);
       }
       if (it.objs.cars) {
         let carS;
@@ -1038,7 +1130,7 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
         const h = D.hazards[i];
         if (!it.objs.kid || !h) return;
         const onCross = (h.active && h.revealed !== false) || (h.cleared && it.objs.kid.position.x > -5.8);
-        const cw = h.at + NOSE + 2.6; // 横断歩道の位置
+        const cw = h.at + NOSE + 10.6; // 横断歩道の位置（止まる線の 8m 先）
         if (onCross && pandaS >= cw + 5.4) hold = Math.max(hold ?? -Infinity, cw + 5.6);
       });
       const prevS = pandaS;
@@ -1062,7 +1154,7 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       if (off != null) ambObj.position.set(1.0, 0, -(s + off)); // センターラインの 上を 追いこす（左に よった トラックと すきまを あける）
       ambObj.userData.lampMat.color.set(Math.floor(time * 6) % 2 ? '#ff2a1f' : '#5a0d0a');
     }
-    for (const w of walkers) { w.o.position.z -= w.v * dt; w.o.position.y = 0.18 + Math.abs(Math.sin(time * 7 + w.o.position.x)) * 0.04; }
+    for (const w of walkers) { const d = w.v * dt; w.o.position.z -= d; if (w.walk) { w.o.userData.step(d, true); w.o.position.y = 0.18; } else w.o.position.y = 0.18 + Math.abs(Math.sin(time * 7 + w.o.position.x)) * 0.04; }
     far.position.set(truck.position.x, 0, truck.position.z);
     // カメラ：はじめは前から回りこみ、そのあと うしろ上から
     introT = Math.min(1, introT + dt / 2.4);
@@ -1072,16 +1164,20 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
     const ea = arriveT * arriveT * (3 - 2 * arriveT);
     const ang = (1 - e) * Math.PI * 0.95 + ea * Math.PI * 0.9;
     // 目標の画面に よせて、少し ひくく・ちかく（トラックが 大きく、道と 町が よく見える）
-    const dist = 12.8 - ea * 2.2;
-    const back = new THREE.Vector3(Math.sin(ang) * dist * 0.5, 6.4 - (1 - e) * 3.2 - ea * 3.2, Math.cos(ang) * dist);
-    camPos.set(truck.position.x + back.x + 0.5, back.y, truck.position.z + back.z);
-    camLook.set(truck.position.x + 0.4, 1.4 + ea * 1.2, truck.position.z - (16 * e + 1) * (1 - ea));
+    // カメラ：目標の 画面に よせて、トラックの うしろ 少し上・近く から、町の 奥まで 見通す
+    const CAM = (leg && leg.id === 'highway' ? { dist: 13, h: 6.6, lookY: 1.6, lookZ: 36, fovK: 0.9 } : { dist: 15, h: 8, lookY: 0.8, lookZ: 30, fovK: 0.75 }); // 高速は 看板・料金所の 屋根（9m より上）の 下を くぐる 高さ // 遠くから 見える角度を せまく（町が 大きく 見える）
+    { const f = baseFov * (CAM.fovK || 1); if (Math.abs(camera.fov - f) > 0.01) { camera.fov = f; camera.updateProjectionMatrix(); } }
+    const dist = CAM.dist - ea * 2.2;
+    const back = new THREE.Vector3(Math.sin(ang) * dist * 0.5, CAM.h - (1 - e) * 2.4 - ea * 2.2, Math.cos(ang) * dist);
+    camPos.set(truck.position.x + back.x + 0.3, back.y, truck.position.z + back.z);
+    camLook.set(truck.position.x + 0.2, CAM.lookY + ea * 0.8, truck.position.z - (CAM.lookZ * e + 1) * (1 - ea));
     camera.position.copy(camPos);
     camera.lookAt(camLook);
   }
 
   function updateTitle(dt) {
     // 正面ななめ前から、黄色い社名板が見える向きで ゆらゆら回す
+    if (camera.fov !== baseFov) { camera.fov = baseFov; camera.updateProjectionMatrix(); }
     truck.rotation.y = -0.55 + Math.sin(time * 0.45) * 0.38;
     const portrait = camera.aspect < 0.75;
     camera.position.set(7.2, 3.6, portrait ? -12.5 : -10.5);
@@ -1097,7 +1193,8 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     // 縦長の画面でもトラックがはみ出さないように、横の見える幅を確保する
-    camera.fov = w / h < 0.62 ? 64 : 54;
+    baseFov = w / h < 0.62 ? 64 : 54;
+    camera.fov = baseFov;
     camera.updateProjectionMatrix();
   }
 
@@ -1138,6 +1235,19 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
       rc.set(camera.position, dir); rc.far = dist * 0.92; rc.camera = camera;
       const hits = rc.intersectObjects(world.children, true).filter((h) => h.object.visible !== false && !h.object.userData.noOcclude && !h.object.isLineSegments && !(h.object.material && h.object.material.opacity === 0));
       return hits.map((h) => ({ name: h.object.name || h.object.type, d: Math.round(h.distance * 10) / 10, y: Math.round(h.point.y * 10) / 10, z: Math.round(h.point.z * 10) / 10 }));
+    },
+    // 看板・標識が 見えるか（テスト用）：前方 8〜60m の 看板へ カメラから 線を 引き、手前に はさまる 物を 返す
+    signCheck() {
+      const out = []; const rc = new THREE.Raycaster(); const c = new THREE.Vector3(); const dir = new THREE.Vector3();
+      const signs = []; world.traverse((o) => { if (o.userData && o.userData.sign) signs.push(o); });
+      for (const sg of signs) {
+        const box3 = new THREE.Box3().setFromObject(sg); box3.getCenter(c);
+        const ahead = truck.position.z - c.z; if (ahead < 8 || ahead > 60) continue;
+        dir.copy(c).sub(camera.position); const dist = dir.length(); dir.normalize(); rc.set(camera.position, dir); rc.far = dist - 0.6; rc.camera = camera;
+        const hits = rc.intersectObjects(world.children, true).filter((h) => { let o = h.object; while (o) { if (o === sg) return false; o = o.parent; } return h.object.visible !== false && !h.object.isLineSegments && !(h.object.material && (h.object.material.opacity === 0 || h.object.material.depthWrite === false)) && h.point.y > 0.3; });
+        if (hits.length) out.push({ sign: sg.type, z: Math.round(c.z), x: Math.round(c.x * 10) / 10, by: hits[0].object.type + (hits[0].object.isInstancedMesh ? '(まとめ)' : ''), at: hits[0].point.toArray().map((v) => Math.round(v * 10) / 10) });
+      }
+      return out;
     },
     debug() { return { calls: renderer.info.render.calls, mode, leg: leg && leg.id, cam: camera.position.toArray().map((x) => Math.round(x * 10) / 10), look: camLook.toArray().map((x) => Math.round(x * 10) / 10), truck: truck.position.toArray().map((x) => Math.round(x * 10) / 10), world: world.children.length, introT, kids: hz.filter((it) => it.objs.kid).map((it) => ({ p: it.objs.kid.position.toArray().map((x) => Math.round(x * 10) / 10), vis: it.objs.kid.visible, sprite: !!it.objs.kid.isSprite })) }; },
     truckScreenY() {

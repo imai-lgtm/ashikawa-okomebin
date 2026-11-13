@@ -656,3 +656,6 @@ rt { font-size: 0.5em; font-weight: 700; }
 .pg-ground { left: 1%; right: 1%; }
 /* 縦が短い画面では、上の ふきだしは 出さない（上の帯に かさなる。声と 画面の 説明で つたわる） */
 .short .mini-say.top, .short .mini-kometa.top { display: none !important; }
+
+/* タイトル：縦が 短い 画面では トラックの 絵を 下へ ずらす（社名の 板と タイトルの 文字が かさならない） */
+#title { background-position: center calc(100% + var(--tshift, 0px)) !important; background-size: 118% auto !important; }

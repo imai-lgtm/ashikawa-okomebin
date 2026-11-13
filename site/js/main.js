@@ -36,6 +36,10 @@ function layout() {
   document.documentElement.style.setProperty('--fw', `${fw}px`);
   document.documentElement.style.setProperty('--u', `${u}px`);
   document.documentElement.classList.toggle('short', vh / (u * 100) < 1.9); // 縦が短い画面（360×640 など）
+  // タイトルの トラックの 絵：社名の 板が タイトルの 文字に かからないよう、縦が 短い 画面では 絵を 下へ ずらす
+  //   絵の 高さ＝はば×1.77（118%・たて横 2:3）。社名の 板の 上の はしは 絵の 上から 約34%
+  const ih = fw * 1.77; const plateTop = vh - ih + ih * 0.30; const textBottom = u * 66;
+  document.documentElement.style.setProperty('--tshift', `${Math.max(0, Math.round(textBottom - plateTop))}px`);
   drive?.resize();
 }
 window.addEventListener('resize', layout);
@@ -442,7 +446,7 @@ const BUILD = {
         // 料金所：めやすの速さ
         el.querySelector('.meter').classList.toggle('etc', !!(h0 && h0.type === 'etc'));
         // 速さの上限（スクールゾーン 30キロ・料金所 20キロ）：上限の線と いまの速さ。こえたら赤
-        const zn = (D.zones || []).find((z) => z.on && !z.done);
+        const zn = (D.zones || []).find((z) => z.on && !z.entered); // 線を こえるまで
         const etcH = h0 && h0.type === 'etc' && !h0.checked ? h0 : null;
         const lim = zn ? zn.limit : etcH ? etcH.slow : null;
         const spg = el.querySelector('.spdgauge');
@@ -452,9 +456,11 @@ const BUILD = {
           spg.querySelector('.sp-sign b').textContent = Math.round(lim * 3.6);
           spg.querySelector('.sp-ok').style.width = `${(lim / top) * 100}%`;
           spg.querySelector('.sp-me').style.left = `${Math.min(100, (D.v / top) * 100)}%`;
-          const over = zn ? D.s >= zn.from && D.v > lim + CONFIG.drive.zoneOver : D.v > lim; // ゾーンは 入ってから 赤
+          const lineAt = zn ? zn.from : etcH.at - CONFIG.drive.etcCheck;
+          const dl = Math.max(0, Math.ceil(lineAt - D.s));
+          const over = D.v > lim; // 赤は 制限を こえたら すぐ（判定は 少し ゆるい：線を こえるとき 制限＋約5キロ まで OK）
           spg.classList.toggle('over', over);
-          spg.querySelector('.sp-say').textContent = over ? 'はやい！ ゆびを はなそう' : zn ? (D.s < zn.from ? 'もうすぐ スクールゾーン' : 'あかに しないで はしろう') : 'バーの てまえで あかに しない';
+          spg.querySelector('.sp-say').textContent = over ? `はやい！ ゆびを はなそう（せんまで ${dl}m）` : `OK！ せんまで ${dl}m`;
         }
         // 高速道路：車線のボタンと合図
         const lanes = !!D.lanes && !D.arrived;
@@ -487,7 +493,7 @@ const BUILD = {
           const txt = am.state === 'coming' ? 'きゅうきゅうしゃ！ ひだりに よって とまろう' : 'きゅうきゅうしゃが とおるよ';
           if (alertSlot.textContent !== txt) alertSlot.innerHTML = `<div class="alert amb"><i class="lamp"></i>${txt}</div>`;
         } else if ((h0 || zn) && !alertSlot.dataset.until) {
-          const txt = h0 ? { signal: 'しんごう！ とまろう', walker: 'ひとが わたるよ！ とまろう', car: 'まえの くるまが とまった！', jam: 'じゅうたいの さいこうび！ とまろう', goal: 'おみせの まえの せんで ぴったり とまろう', etc: h0.checked && !h0.open ? 'ETCの バーが あかない！' : 'りょうきんじょ！ 20キロ いかに' }[h0.type] : 'スクールゾーン！ 30キロ いかで';
+          const txt = h0 ? { signal: 'しんごう！ とまろう', walker: 'ひとが わたるよ！ とまろう', car: 'まえの くるまが とまった！', jam: 'じゅうたいの さいこうび！ とまろう', goal: 'おみせの まえの せんで ぴったり とまろう', etc: h0.checked && !h0.open ? 'ETCの バーが あかない！' : 'りょうきんじょ！ 20キロ いかに' }[h0.type] : 'スクールゾーン！ 30キロ いかに';
           if (alertSlot.textContent !== txt) alertSlot.innerHTML = `<div class="alert ${zn && !h0 ? 'zone' : ''}">${txt}</div>`;
         } else if (!h0 && !zn && !am && !alertSlot.dataset.until && alertSlot.innerHTML) alertSlot.innerHTML = '';
         // とうちゃく
@@ -562,10 +568,10 @@ const BUILD = {
         el.classList.toggle('dim', true); // 地図のうしろの同じ絵は、いつも白く薄める
         const guide = el.querySelector('.guide');
         const G = V && st.phase === 'deliver' ? {
-          park: V.guided ? 'せんぱい：うらの「にもつ おろしば」に とめよう' : 'カードの ★の ばしょに とめよう',
+          park: V.guided ? 'せんぱい：マニュアルの ★の ばしょに とめよう' : 'カードの ★の ばしょに とめよう',
           back: V.guided ? 'せんぱい：ハンドルを にぎっている あいだ さがるよ。よこに なぞって まわそう' : 'ほんばん！ てんせん なしで ぴったり つけよう',
           gate: 'パワーゲートで だいしゃを おろすよ',
-          place: V.guided ? 'せんぱい：おこめは「おこめの おきば」へ！' : 'カードで みた ばしょへ はこぼう',
+          place: V.guided ? 'おこめは どこに おく？（マニュアルを おもいだそう）' : 'おこめは どこに おく？（カードで みた ばしょ）',
           stamp: 'でんぴょうに ハンコを もらおう',
           done: 'とどけたよ！',
         }[step] : '';
@@ -577,7 +583,7 @@ const BUILD = {
           else if (store === 'store1' && st.phase === 'talk' && st.talk && st.talk.i >= 0) card.appendChild(manualCard(store, 'back', 'rice', { timer: false }));
           return;
         }
-        if (!V.guided && !V.done) {
+        if (!V.done) { // マニュアルカードは いつでも 見なおせる（1けんめは 減点なし）
           const rb = h(`<button class="btn btn-sub mcard-btn" id="review-btn">${ART.ICON.card} カード</button>`);
           onTap(rb, () => A.review());
           card.appendChild(rb);
@@ -1097,7 +1103,8 @@ function handleEvents() {
         if (e.what === 'load') { if (S.load && S.load.t < CONFIG.points.loadTimeBase - 8) speak('v_loadfast'); else say('ばっちり！ おみせごとに わけられたね！', 'kometa', 2400); }
         break;
       case 'hazard': audio.sfx(e.hazard === 'walker' ? 'crossing' : 'hazard'); break;
-      case 'zone': audio.sfx('line'); say('しょうがっこうの まえだ。子どもが いるから、じそく30キロ いかで はしろう', 'senpai', 3400); break;
+      case 'zone': audio.sfx('line'); say('しょうがっこうの まえだ。せんまでに ゆびを はなして、ゆっくりに しよう', 'senpai', 3400); break;
+      case 'zoneIn': if (e.ok) say('いいね！ ゾーンの なかは じどうで ゆっくり はしるよ', 'senpai', 2400); else { say('はやかったね。ゾーンの なかは じどうで ゆっくりに するよ', 'senpai', 2600); } break;
       case 'etcOpen': audio.sfx('check'); break;
       case 'heart': flyHearts(e.n, e.who); break;
       case 'zoneEnd': if (e.overT <= CONFIG.drive.zoneGrades[1][0]) snapTake('zone', 'スクールゾーンを ゆっくり はしった'); break;

@@ -20,7 +20,9 @@ export const CONFIG = {
     stopGrades: [[2.5, 100, 'ピタッ！'], [5, 60, 'いいね！'], [10, 30, 'OK'], [Infinity, 10, 'はやめ']],
     laneTime: 0.9, // 車線を変えるのにかかる秒数
     cue: 55, // 車線の合図が出る距離（m）。これに「速さ×1秒」を足した所で出る
-    etcCheck: 10, // 料金所：バーの この距離（m）手前で 速さを読む。時速20km以下ならバーが開く。速すぎるとバーは開かず、先輩が止める
+    etcCheck: 40, // 料金所：バーの この距離（m）手前に「ゆっくり」の線。線を こえるとき 時速20キロ（＋少し）いかなら OK
+    slowAnnounce: 48, // ゆっくり区間の 知らせは 線の この距離（m）手前（指を はなす 時間が じゅうぶん ある）
+    slowTol: 1.4, // 線を こえるときの ゆるさ（m/s。時速 約5キロ） // 料金所：バーの この距離（m）手前で 速さを読む。時速20km以下ならバーが開く。速すぎるとバーは開かず、先輩が止める
     etcReopen: 1.0, // 止まってから バーが開くまでの秒数
     ambWindow: 4.0, // 救急車：サイレンが きこえてから この秒数の うちに 止まって ゆずる（まにあわないと 先輩が とめる）
     stopRange: 25, // 線から この距離（m）より 手前で 止まっても、線で 止まった ことには しない
@@ -48,12 +50,12 @@ export const CONFIG = {
       { type: 'signal', at: 216, wait: 1.5 },
     ], pandaAt: 140, ambulanceAt: 236,
     // 小学校の前：じそく30キロ（秒速8.3m）いかで走る。指を おしたり はなしたりして 速さを たもつ
-    zones: [{ type: 'school', from: 134, until: 194, limit: 8.3 }] },
+    zones: [{ type: 'school', from: 152, until: 200, limit: 8.3 }] },
     // 出発する前（止まっている間）に、なかまから連絡がくる。運転中にスマホを見ない
     leg2a: { length: 70, vmax: 13, place: 'しずおか{市|し}', hazards: [], choiceAt: 0 },
     // 高速道路：左が走行車線(0)、右が追いこし車線(1)。工事の車線規制→走行車線にもどる→合流でゆずる→もどる→渋滞の最後尾
     highway: { length: 556, goal: { type: 'etc', at: 505, slow: 5.6 }, vmax: 22, place: 'とうめい こうそくどうろ', lanes: true, hazards: [
-      { type: 'jam', at: 465, wait: 1.5 },
+      { type: 'jam', at: 425, wait: 1.5 }, // 料金所の ゆっくりの 線（465m）より 40m 手前で 止まる
     ], laneEvents: [
       { type: 'cones', at: 108, until: 148 },
       { type: 'keepLeft', at: 230 },
@@ -75,9 +77,9 @@ export const CONFIG = {
   // 毎回ちがう道：遊ぶたびに、道ごとに どれか1つの ならびを えらぶ（じゃま・スクールゾーン・車線の できごとの 場所と順番）
   variants: {
     leg1: [
-      { hazards: [{ type: 'signal', at: 60, wait: 1.5 }, { type: 'walker', at: 112, wait: 1.9 }, { type: 'signal', at: 216, wait: 1.5 }], zones: [{ type: 'school', from: 134, until: 194, limit: 8.3 }], pandaAt: 140 },
-      { hazards: [{ type: 'car', at: 60, wait: 1.2 }, { type: 'walker', at: 164, wait: 1.9 }, { type: 'signal', at: 216, wait: 1.5 }], zones: [{ type: 'school', from: 84, until: 144, limit: 8.3 }], pandaAt: 175 },
-      { hazards: [{ type: 'signal', at: 60, wait: 1.5 }, { type: 'walker', at: 112, wait: 1.9 }, { type: 'car', at: 216, wait: 1.2 }], zones: [{ type: 'school', from: 134, until: 194, limit: 8.3 }], pandaAt: 140 },
+      { hazards: [{ type: 'signal', at: 60, wait: 1.5 }, { type: 'walker', at: 112, wait: 1.9 }, { type: 'signal', at: 216, wait: 1.5 }], zones: [{ type: 'school', from: 152, until: 200, limit: 8.3 }], pandaAt: 140 },
+      { hazards: [{ type: 'car', at: 60, wait: 1.2 }, { type: 'walker', at: 164, wait: 1.9 }, { type: 'signal', at: 216, wait: 1.5 }], zones: [{ type: 'school', from: 100, until: 150, limit: 8.3 }], pandaAt: 175 },
+      { hazards: [{ type: 'signal', at: 60, wait: 1.5 }, { type: 'walker', at: 112, wait: 1.9 }, { type: 'car', at: 216, wait: 1.2 }], zones: [{ type: 'school', from: 152, until: 200, limit: 8.3 }], pandaAt: 140 },
     ],
     highway: [
       // conesR：右の車線だけ 工事（左を そのまま 走るのが 正解。「合図が出たら おす」では なく、見て きめる）
@@ -421,24 +423,17 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     } else if (D.amb && (D.amb.state === 'passing' || D.amb.forced && D.amb.state === 'coming')) {
       // 救急車に ゆずって 止まっている（または 先輩が 止めている）
       D.v = Math.max(0, D.v - K.brake * dt);
-    } else if (D.zoneBrake) {
-      // スクールゾーンで 赤が つづいたので 先輩が ブレーキ（飛ばしても 早く つかない）
-      D.v = Math.max(0, D.v - K.brake * dt);
-      if (D.v <= D.zoneBrake) D.zoneBrake = null;
     } else {
-      // ゆっくり 区間（スクールゾーン・料金所の 手前）は、加速も ブレーキも やさしく（指の おしはなしで 速さを たもちやすい）
-      const inZone = (D.zones || []).some((z) => z.on && !z.done && D.s >= z.from - 4);
-      const etcH = D.hazards.find((x) => x.type === 'etc' && x.active && !x.checked && x.at - D.s < K.etcSoftFrom);
-      const stopH = D.hazards.some((x) => x.active && x.type !== 'etc'); // 止まる線が 出ているときは ふつうの ブレーキ（止まれるように）
-      const soft = !stopH && (inZone || !!etcH);
-      if (D.holding) D.v = Math.min(D.vmax, D.v + K.accel * (soft ? K.zoneAccel : 1) * dt);
-      else D.v = Math.max(soft && D.v > 2.5 ? 2.5 : 0, D.v - (soft ? K.softBrake : K.brake) * dt); // ゆっくり 区間は 止まりきらない（はなしすぎても 進む）
+      // ゆっくり区間（スクールゾーンの 中・料金所の 線の 先）は、おしていても 上限より 速く ならない（トラックの 速さ リミッター）
+      const lim = slowLimit();
+      if (D.holding) D.v = lim != null && D.v > lim ? Math.max(lim, D.v - K.softBrake * dt) : Math.min(lim != null ? lim : D.vmax, D.v + K.accel * (lim != null ? 0.6 : 1) * dt);
+      else D.v = Math.max(0, D.v - K.brake * dt);
     }
     // 前にある、まだ終わっていない一番近い じゃま
     const h = D.hazards.find((x) => !x.cleared && x.at > D.s - 0.01);
     let limit = Infinity;
     if (h) {
-      const reveal = D.vmax * K.react + (D.vmax * D.vmax) / (2 * K.brake) + 6;
+      const reveal = h && h.type === 'etc' ? K.etcCheck + K.slowAnnounce : D.vmax * K.react + (D.vmax * D.vmax) / (2 * K.brake) + 6; // 料金所は ゆっくりの 線の 48m 手前から 知らせる
       if (!h.revealed && h.at - D.s <= reveal) {
         h.revealed = true;
         h.active = true;
@@ -448,10 +443,10 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     }
     if (h && h.type === 'etc' && h.active) {
       // 料金所（ETC）：バーの手前で 速さを読む。時速20km以下ならバーが開く。速すぎると開かないので、先輩が止める
-      if (!h.checked && D.s + D.v * dt >= h.at - K.etcCheck) {
+      if (!h.checked && D.s + D.v * dt >= h.at - K.etcCheck) { // ゆっくりの 線を こえた
         h.checked = true;
         h.speed = D.v;
-        if (D.v <= h.slow + K.etcTol) {
+        if (D.v <= h.slow + K.slowTol) {
           h.open = true; h.ok = true;
           addPoints(100, 'ETC ゆっくり OK！', 'drive');
           s.score.perfectStops += 1;
@@ -582,30 +577,33 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
   }
 
   // スクールゾーン：はいったら 合図。中では 制限より 速すぎた時間を数え、出たら点
+  // いま 走っている ゆっくり区間の 上限（なければ null）
+  function slowLimit() {
+    const D = s.drive;
+    const z = (D.zones || []).find((x) => x.entered && !x.done);
+    if (z) return z.limit;
+    const e = D.hazards.find((x) => x.type === 'etc' && x.active && x.checked && x.open);
+    return e ? e.slow : null;
+  }
+
+  // スクールゾーン：線の 48m 手前で 知らせ → 入口の 線を こえるときの 速さで 1回だけ 判定 → 中は 自動で ゆっくり
   function zoneTick(dt) {
     const D = s.drive; const K = C.drive;
     for (const z of D.zones) {
       if (z.done) continue;
-      // 知らせは 入口の 18m 手前（横断歩道で 子どもを まっている あいだには 出さない）
-      if (!z.on && D.s >= z.from - 18 && !D.hazards.some((h) => h.active && h.at < z.from)) { z.on = true; emit('zone', { id: z.id, zone: z.type, limit: z.limit }); }
+      if (!z.on && D.s >= z.from - K.slowAnnounce && !D.hazards.some((x) => x.active && x.type !== 'etc' && x.at < z.from)) { z.on = true; emit('zone', { id: z.id, zone: z.type, limit: z.limit }); } // 止まる 線を こえてから 知らせる
       if (!z.on) continue;
-      const inside = D.s >= z.from && D.s < z.until;
-      z.over = inside && D.v > z.limit + K.zoneOver;
-      if (z.over) { z.overT += dt; z.run = (z.run || 0) + dt; } else z.run = 0;
-      // 赤が つづいたら 先輩が 速さを おとす（小学校の前を 飛ばしても 時間は ちぢまない）
-      if (z.run > K.zoneBrakeAfter && !D.zoneBrake) {
-        D.zoneBrake = 0.01; z.run = 0; // いったん とめる
-        s.score.legStops[D.leg] = (s.score.legStops[D.leg] || 0) + 1; // おこめも ゆれる（ていねい配送が なくなる）
-        emit('zoneSlow', { id: z.id });
+      if (!z.entered && D.s >= z.from) {
+        z.entered = true;
+        const over = D.v - z.limit;
+        const g = over <= K.slowTol ? [100, 'スクールゾーン ばっちり！', 3] : over <= K.slowTol + 2.2 ? [60, 'スクールゾーン いいね！', 2] : [30, 'もうすこし ゆっくり', 0];
+        z.overT = Math.max(0, over); z.grade = g[1];
+        addPoints(g[0], g[1], 'drive');
+        heart(g[2], 'school');
+        if (g[0] === 100) { s.score.perfectStops += 1; emit('perfect', { id: z.id, zone: true }); }
+        emit('zoneIn', { id: z.id, ok: g[0] >= 60, label: g[1] });
       }
-      if (D.s >= z.until) {
-        z.done = true;
-        const g = K.zoneGrades.find(([t]) => z.overT <= t);
-        addPoints(g[1], g[2], 'drive');
-        heart(z.overT <= K.zoneGrades[0][0] ? 3 : z.overT <= K.zoneGrades[1][0] ? 2 : 0, 'school');
-        if (z.overT <= K.zoneGrades[0][0]) { s.score.perfectStops += 1; emit('perfect', { id: z.id, zone: true }); }
-        emit('zoneEnd', { id: z.id, overT: z.overT, label: g[2] });
-      }
+      if (D.s >= z.until) { z.done = true; emit('zoneEnd', { id: z.id, overT: z.overT, label: z.grade }); }
     }
   }
 
@@ -711,7 +709,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
       showCard: storeId === 'store2',
       areaOrder: shuffle(st.areas, rnd), // 置き場所の ならびは 毎回 かわる（答えが いつも 左はし に ならない）
       misses: 0,
-      hint: storeId === 'store1',
+      hint: false, // 答えは 光らせない（まちがえたときだけ 光る）
       gate: 0,
       holding: false,
       stamped: false,
@@ -723,7 +721,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     const V = s.deliver;
     V.misses += 1;
     s.score.mistakes += 1;
-    if (V.misses >= 2) V.hint = true;
+    if (V.misses >= (V.guided ? 1 : 2)) V.hint = true; // 1けんめは 1回、2けんめは 2回 まちがえたら 答えが 光る
     emit('miss', { what: V.step });
   }
 
@@ -734,7 +732,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     if (V.misses === 0) addPoints(C.points.park, 'ここだね！', 'deliver');
     startBack(V, 0);
     V.misses = 0;
-    V.hint = V.guided;
+    V.hint = false;
     emit('good', { what: 'park' });
     return true;
   }
@@ -838,9 +836,9 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
   function review() {
     // 2けんめで、マニュアルカードを見なおす（少しだけ点がへる）
     const V = s.deliver;
-    if (s.phase !== 'deliver' || V.guided || V.done || V.step === 'card') return false;
+    if (s.phase !== 'deliver' || V.done || V.step === 'card') return false;
     V.showCard = !V.showCard;
-    if (V.showCard) s.score.reviews += 1;
+    if (V.showCard && !V.guided) s.score.reviews += 1; // 1けんめ（れんしゅう）は 何回 見ても 減点なし
     return true;
   }
 
@@ -854,7 +852,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     } else if (V.step === 'gate') {
       { // 自動で下りる
         V.gate = Math.min(1, V.gate + dt / C.gate.seconds);
-        if (V.gate >= 1) { V.step = 'place'; V.misses = 0; V.hint = V.guided; emit('good', { what: 'gate' }); }
+        if (V.gate >= 1) { V.step = 'place'; V.misses = 0; V.hint = false; emit('good', { what: 'gate' }); }
       }
     }
   }
