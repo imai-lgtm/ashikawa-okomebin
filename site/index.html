@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#1b264e">
+  <title>あしかわ おこめ便</title>
+  <link rel="icon" type="image/webp" href="img/emblem.webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <p id="rotate-hint" class="rotate-hint">スマホを たてにすると<br>おおきく あそべるよ</p>
+  <div id="frame">
+    <canvas id="three" aria-hidden="true"></canvas>
+    <div id="scene"></div>
+
+    <!-- 事務所の画面に出る、トラックの今の状態（会社では5つの状態で見える） -->
+    <div id="hud" hidden>
+      <div class="status"><span class="status-label">トラックの いま</span><span id="status" class="status-pill">待機</span></div>
+      <div class="score-box" id="score-box"><small>とくてん</small><b id="score">0</b></div>
+      <div class="hearts" id="hearts" aria-label="ありがとうの ハート"><svg viewBox="0 0 32 30" class="hicon"><path d="M16 28 C6 20 1 14 1 8.5 A7.5 7.5 0 0 1 16 5 A7.5 7.5 0 0 1 31 8.5 C31 14 26 20 16 28Z" fill="#ff5a7a" stroke="#fff" stroke-width="2.5"/></svg><b id="heart-n">0</b></div>
+      <div id="progress" class="progress"></div>
+    </div>
+
+    <div id="talk" hidden>
+      <div class="talk-avatar" id="talk-avatar"></div>
+      <div class="talk-bubble">
+        <p class="talk-name" id="talk-name"></p>
+        <p class="talk-text" id="talk-text"></p>
+        <span class="talk-next" aria-hidden="true">▼</span>
+      </div>
+    </div>
+
+    <div id="fx" aria-hidden="true"></div>
+    <button id="mute" class="mute" aria-label="音を消す"></button>
+
+    <section id="title" class="overlay">
+      <div class="title-top">
+        <p class="title-company"><span id="title-emblem" class="title-emblem"></span><ruby>芦川商運<rt>あしかわしょううん</rt></ruby></p>
+        <h1 class="title-logo"><span class="l1">あしかわ</span><span class="l2">おこめ<ruby>便<rt>びん</rt></ruby></span></h1>
+        <p class="title-sub">しずおかの ごはんを とどけよう！</p>
+      </div>
+      <div class="title-bottom">
+        <button id="start" class="btn btn-big">スタート</button>
+        <p class="title-note">ドライバーに なって、おこめを とどける ゲームだよ（やく3ぷん）</p>
+      </div>
+    </section>
+
+    <section id="cert" class="overlay" hidden></section>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
