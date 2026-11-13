@@ -37,8 +37,12 @@ function ensure() {
   meter.fftSize = 1024;
   master.connect(meter);
   // どのタッチでも音を起こす（ブラウザが止めていても再開する）。iPhone は消音スイッチを無視して鳴らす設定にする
-  const wake = () => { if (ctx.state !== 'running') ctx.resume(); };
-  ['pointerdown', 'touchend', 'keydown'].forEach((ev) => window.addEventListener(ev, wake, { passive: true }));
+  // iPhone は 電話・通知・画面の 切りかえ などで 音が とまる（suspended / interrupted）。見えている あいだは すぐ 再開する
+  const wake = () => { if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {}); };
+  ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click', 'keydown'].forEach((ev) => window.addEventListener(ev, wake, { passive: true }));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(wake, 50); });
+  window.addEventListener('pageshow', wake); window.addEventListener('focus', wake);
+  ctx.onstatechange = () => { if (ctx.state !== 'running' && !document.hidden) setTimeout(wake, 300); };
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
   // iPhone 用：最初に無音を1回鳴らして、音の出口を開けておく
   try { const b = ctx.createBuffer(1, 1, 22050); const s0 = ctx.createBufferSource(); s0.buffer = b; s0.connect(ctx.destination); s0.start(0); } catch {}
@@ -155,7 +159,7 @@ export const audio = {
     if (!ctx || track === bgmNow) return;
     const prev = bgmNow ? bgmEls[bgmNow] : null;
     bgmNow = track;
-    if (prev && prev.node) { const n = prev.node; prev.node = null; n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.25); setTimeout(() => { try { n.s.stop(); } catch {} }, 1500); }
+    if (prev && prev.node) { const n = prev.node; const pe = prev; prev.node = null; n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.25); setTimeout(() => { try { n.s.stop(); n.s.disconnect(); } catch {} if (!pe.node) { pe.buf = null; pe.loading = false; } }, 1500); } // つかわない 曲は メモリから はなす（つぎに 使うときに 読みなおす）
     if (!track) return;
     const startIt = () => {
       const e = bgmEls[track];
@@ -168,10 +172,11 @@ export const audio = {
       g.gain.setTargetAtTime(track === 'drive' ? 0.5 : 0.55, ctx.currentTime, 0.4);
       e.node = { s, g };
     };
-    if (!bgmEls[track]) {
-      bgmEls[track] = { buf: null, node: null };
+    if (!bgmEls[track]) bgmEls[track] = { buf: null, node: null, loading: false };
+    if (!bgmEls[track].buf && !bgmEls[track].loading) {
+      bgmEls[track].loading = true;
       fetch(`se/bgm_${track}.mp3`).then((r) => r.arrayBuffer()).then((ab) => new Promise((ok, ng) => ctx.decodeAudioData(ab, ok, ng)))
-        .then((buf) => { bgmEls[track].buf = buf; startIt(); }).catch(() => {});
+        .then((buf) => { bgmEls[track].buf = buf; bgmEls[track].loading = false; startIt(); }).catch(() => { bgmEls[track].loading = false; });
     } else startIt();
   },
   // 声：鳴っている声は止めて、新しい声を鳴らす。声の間は曲を小さくする。鳴った長さ（秒）を返す（無ければ 0）

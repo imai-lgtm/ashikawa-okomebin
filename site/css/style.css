@@ -637,3 +637,22 @@ rt { font-size: 0.5em; font-weight: 700; }
 .rig.in .rig-cart { opacity: 1 !important; }
 /* 納品の背景に 描いてある 車と かさならないよう、下に 地面の色を しく */
 .sc-store .rig-floor { position: absolute; left: 0; right: 0; bottom: 0; height: 52%; background: linear-gradient(180deg, rgba(142,148,155,0) 0%, rgba(142,148,155,.92) 22%, #8e949b 100%); pointer-events: none; }
+
+/* パワーゲート（11/14 作り直し：横から 見た図。台が 上下し、台車が 荷台へ 出入りする のが 見える） */
+.pgate { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--u) * 30); width: calc(var(--u) * 96); aspect-ratio: 100 / 45; --lift: 0%; --cx: 0.5%; --roll: 0deg; }
+.pg-ground { position: absolute; left: -4%; right: -4%; bottom: -3%; height: 9%; border-radius: 50%; background: radial-gradient(ellipse at 60% 50%, rgba(0,0,0,.32), rgba(0,0,0,0) 70%); }
+.pg-truck { position: absolute; right: 0; bottom: 0; width: 72%; z-index: 2; filter: drop-shadow(0 calc(var(--u) * .6) calc(var(--u) * .6) rgba(0,0,0,.3)); }
+.pg-cart { position: absolute; left: var(--cx); bottom: calc(var(--lift) + 4.6%); width: 15%; z-index: 1; filter: drop-shadow(0 calc(var(--u) * .4) calc(var(--u) * .4) rgba(0,0,0,.3)); }
+/* 台：横から 見た 鉄の 板（パワーゲートの 絵の 前の ふち を 使う） */
+.pg-gate { position: absolute; left: 10.5%; width: 18.5%; bottom: var(--lift); height: 4.6%; z-index: 3; border-radius: 2px; background: url(../img/lift.webp) center 88% / 100% 520% no-repeat; box-shadow: 0 calc(var(--u) * .4) calc(var(--u) * .5) rgba(0,0,0,.35); }
+.pg-gate i { position: absolute; right: -3%; top: 0; bottom: 0; width: 5%; background: #3b4048; border-radius: 2px; }
+/* 台を 上げ下げする 柱（荷台の うしろの はし） */
+.pg-post { position: absolute; left: 27.2%; width: 1.6%; bottom: 0; height: calc(var(--lift) + 6%); z-index: 3; background: linear-gradient(90deg, #6c737d, #9aa2ad 50%, #5d636c); border-radius: 2px; }
+.short .pgate { bottom: calc(var(--u) * 24); }
+/* パワーゲートの 図を 大きく、ふきだしに かからない 高さに */
+.pgate { width: calc(var(--fw) * .98) !important; max-width: calc(var(--u) * 118); bottom: calc(var(--u) * 46) !important; }
+.short .pgate { bottom: calc(var(--u) * 40) !important; }
+.short .pgate { bottom: calc(var(--u) * 64) !important; }
+.pg-ground { left: 1%; right: 1%; }
+/* 縦が短い画面では、上の ふきだしは 出さない（上の帯に かさなる。声と 画面の 説明で つたわる） */
+.short .mini-say.top, .short .mini-kometa.top { display: none !important; }

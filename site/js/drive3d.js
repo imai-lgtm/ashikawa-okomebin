@@ -643,20 +643,26 @@ export async function createDrive3D(canvas, { emblemImg = null, config, panda = 
           world.add(boxes, walls); if (roofs) world.add(roofs);
         });
       }
+      // 標識・信号の 手前（カメラがわ）には 木や 電柱を 立てない（標識が かくれない ように）
+      const signSpots = [];
+      for (const hh of (L.hazards || [])) { if (hh.type === 'walker') signSpots.push([-1, -(hh.at + NOSE) + 6]); if (hh.type === 'signal') signSpots.push([1, -(hh.at + NOSE) - 4]); }
+      for (const zn of (L.zones || [])) signSpots.push([-1, -(zn.from + NOSE) + 6]);
+      const hidesSign = (side, zt) => signSpots.some(([sd, sz]) => sd === side && zt - sz > -5 && zt - sz < 26);
       // 街路樹（歩道の 車道がわ）と 影
       const trees = []; const shadows = [];
-      for (let z = 22; z > zEnd; z -= 18) for (const side of [-1, 1]) { if (rand(z, side + 7) < 0.25) continue; trees.push([side * 4.6, z - 6, 4.4]); shadows.push([side * 4.6 + 0.5, z - 6 + 0.6, 2.8, 2.2]); }
+      for (let z = 22; z > zEnd; z -= 18) for (const side of [-1, 1]) { if (rand(z, side + 7) < 0.25 || hidesSign(side, z - 6)) continue; trees.push([side * 4.6, z - 6, 4.4]); shadows.push([side * 4.6 + 0.5, z - 6 + 0.6, 2.8, 2.2]); }
       world.add(boards(T.tree_round, trees));
       // 電柱（両がわ）と、電線（たるませて 3本ずつ）
       const poles = []; const poleZ = [];
       for (let z = 14; z > zEnd - 20; z -= 26) poleZ.push(z);
-      for (const side of [-1, 1]) for (const z of poleZ) { poles.push([side * 4.25, z, 8.6]); shadows.push([side * 4.25 + 0.52 * 3.2, z + 0.85 * 3.2, 0.4, 6.4]); }
+      for (const side of [-1, 1]) for (const z of poleZ) { if (hidesSign(side, z)) continue; poles.push([side * 4.25, z, 8.6]); shadows.push([side * 4.25 + 0.52 * 3.2, z + 0.85 * 3.2, 0.4, 6.4]); }
       world.add(boards(T.pole, poles));
       const wpts = [];
       for (const side of [-1, 1]) for (let wi = 0; wi < 3; wi++) {
         const y0 = 8.55 - wi * 0.42; const x0 = side * (4.25 + (wi - 1) * 0.35);
         for (let i = 0; i < poleZ.length - 1; i++) {
           const za = poleZ[i]; const zb = poleZ[i + 1]; const N = 8;
+          if (hidesSign(side, za) || hidesSign(side, zb)) continue; // 立てなかった 電柱には 電線も かけない
           for (let j = 0; j < N; j++) {
             const t0 = j / N; const t1 = (j + 1) / N;
             wpts.push(x0, y0 - Math.sin(Math.PI * t0) * 0.45, za + (zb - za) * t0, x0, y0 - Math.sin(Math.PI * t1) * 0.45, za + (zb - za) * t1);

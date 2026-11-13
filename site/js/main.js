@@ -28,10 +28,14 @@ const STATUS_CLASS = { 走行中: 's-move', 荷下ろし中: 's-unload', 荷積�
 function layout() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const fw = Math.min(vw, vh * 0.58);
+  // スマホを たてに 持っているときは、横はばいっぱいに 広げる（iPhone SE の Safari のように 縦が 短くても 左右に すきまを 作らない）
+  //   中の 部品の 大きさ（--u）は、縦が 短いときだけ 少し 小さくして、上下に おさまるようにする
+  const portrait = vw <= vh;
+  const fw = portrait ? vw : Math.min(vw, vh * 0.58);
+  const u = Math.min(fw, vh * 0.56) / 100;
   document.documentElement.style.setProperty('--fw', `${fw}px`);
-  document.documentElement.style.setProperty('--u', `${fw / 100}px`);
-  document.documentElement.classList.toggle('short', vh / fw < 1.9); // 縦が短い画面（360×640 など）
+  document.documentElement.style.setProperty('--u', `${u}px`);
+  document.documentElement.classList.toggle('short', vh / (u * 100) < 1.9); // 縦が短い画面（360×640 など）
   drive?.resize();
 }
 window.addEventListener('resize', layout);
@@ -350,7 +354,7 @@ const BUILD = {
       ${rigHtml()}
       <div class="bottom-bar"></div>
     </div>`);
-    const rig = el.querySelector('.rig');
+    const rig = el.querySelector('.pgate');
     let lastDone = null;
     return {
       el,
@@ -358,7 +362,7 @@ const BUILD = {
         const G = st.gate;
         const p = G ? G.progress : 0;
         audio.beep(!!(G && !G.done && st.phase === 'gate'));
-        rigSet(rig, Math.min(1, p / 0.72), Math.max(0, (p - 0.72) / 0.28)); // 台が上がる → 台車が 荷台の おくへ
+        rigSet(rig, p); // 台車が 台へ → 台が 上がる → 台車が 荷台の 中へ
         const done = !!(G && G.done);
         if (done !== lastDone) {
           lastDone = done;
@@ -545,7 +549,7 @@ const BUILD = {
         if (V && step === 'card') el.querySelector('.mcard-timer i')?.style.setProperty('width', `${Math.max(0, 1 - V.cardT / V.cardSeconds) * 100}%`);
         if (V && step === 'back') drawBack(el, V);
         if (V && step === 'gate') {
-          rigSet(el.querySelector('.rig'), 1 - Math.max(0, (V.gate - 0.28) / 0.72), 1 - Math.min(1, V.gate / 0.28)); // 台車が 出てくる → 台が 下りる
+          rigSet(el.querySelector('.pgate'), 1 - V.gate); // 積むときの 逆：台車が 出てくる → 台が 下りる → 地面へ
           audio.beep(V.gate < 1);
         }
         if (sub === lastSub) return;
@@ -616,11 +620,11 @@ const BUILD = {
           drawBack(el, V);
         } else if (step === 'gate') {
           body.appendChild(h('<div class="rig-floor"></div>'));
-          body.appendChild(h(rigHtml('down')));
-          rigSet(el.querySelector('.rig'), 1, 1);
+          body.appendChild(h(rigHtml()));
+          rigSet(el.querySelector('.pgate'), 1);
           // パワーゲートは 自動で 下りる（押すだけの 操作は なくした）
         } else if (step === 'place') {
-          const areas = conf.areas.map((a) => `<button class="area ${V.hint && a === V.area ? 'hint' : ''}" data-area="${a}"><img src="${ART.IMG(`area_${a}`)}" alt="" draggable="false"><span>${AREA_LABEL[a]}</span></button>`).join('');
+          const areas = (V.areaOrder || conf.areas).map((a) => `<button class="area ${V.hint && a === V.area ? 'hint' : ''}" data-area="${a}"><img src="${ART.IMG(`area_${a}`)}" alt="" draggable="false"><span>${AREA_LABEL[a]}</span></button>`).join('');
           const wrap = h(`<div><div class="areas">${areas}</div>
             <button class="cart-drag" id="cart-drag" aria-label="だいしゃ"><img src="${ART.IMG('cart_full')}" alt="" draggable="false"></button>
             <div class="drag-tip">だいしゃを おく ばしょへ なぞろう</div></div>`);
@@ -919,13 +923,30 @@ function drawMonitor(cv, b) {
   g.fillText(`かべまで ${Math.max(0, b.y - 0.3).toFixed(1)} m`, W / 2, H - 6);
 }
 
-// パワーゲートの 動き：p（台の高さ 0＝地面・1＝荷台の床）、ci（台車が 荷台の中へ 入った ぐあい 0〜1）
-function rigSet(rig, p, ci) { if (!rig) return; rig.style.setProperty('--p', p.toFixed(3)); rig.style.setProperty('--ci', ci.toFixed(3)); }
-// 荷台のうしろ＋パワーゲート＋台車（--p：0＝地面、1＝荷台の床の高さ）
-function rigHtml(dir = 'up') {
-  return `<div class="rig ${dir}">
-    <img class="rig-truck" src="${ART.IMG('rear_truck')}" alt="トラックの うしろ" draggable="false">
-    <div class="rig-lift"><img class="rig-cart" src="${ART.IMG('cart_full')}" alt="" draggable="false"><img class="rig-plate" src="${ART.IMG('lift')}" alt="" draggable="false"></div>
+// パワーゲート（横から見た図）：トラックの うしろ（左）に 台。t＝0 台車は 地面、t＝1 台車は 荷台の 中
+//   0〜0.3 台車が 台に のる → 0.3〜0.65 台が 荷台の 床の 高さまで 上がる → 0.65〜1 台車が 荷台の 中へ（トラックの うしろに かくれる）
+//   下ろすときは t を 1→0 に 動かす（同じ 動きの 逆）
+const PG = { floor: 21.8, cartW: 15, gateL: 10.5, gateW: 18.5, truckL: 28 };
+function rigSet(rig, t) {
+  if (!rig) return;
+  const ease = (k) => k * k * (3 - 2 * k);
+  const a = ease(Math.min(1, Math.max(0, t / 0.3)));
+  const b = ease(Math.min(1, Math.max(0, (t - 0.3) / 0.35)));
+  const c = ease(Math.min(1, Math.max(0, (t - 0.65) / 0.35)));
+  const lift = b * PG.floor; // 台の 高さ（%）
+  const onGate = PG.gateL + (PG.gateW - PG.cartW) / 2;
+  const x = 0.5 + a * (onGate - 0.5) + c * (PG.truckL + 16 - onGate); // 台車の 左はし（%）
+  rig.style.setProperty('--lift', `${lift.toFixed(2)}%`);
+  rig.style.setProperty('--cx', `${x.toFixed(2)}%`);
+  rig.style.setProperty('--roll', `${((a + c) * 540).toFixed(0)}deg`);
+}
+function rigHtml() {
+  return `<div class="pgate">
+    <div class="pg-ground"></div>
+    <img class="pg-cart" src="${ART.IMG('cart_full')}" alt="" draggable="false">
+    <img class="pg-truck" src="${ART.IMG('truck_side')}" alt="トラック" draggable="false">
+    <div class="pg-gate"><i></i></div>
+    <div class="pg-post"></div>
   </div>`;
 }
 
@@ -1080,7 +1101,7 @@ function handleEvents() {
       case 'etcOpen': audio.sfx('check'); break;
       case 'heart': flyHearts(e.n, e.who); break;
       case 'zoneEnd': if (e.overT <= CONFIG.drive.zoneGrades[1][0]) snapTake('zone', 'スクールゾーンを ゆっくり はしった'); break;
-      case 'tooFar': say('もうすこし まえまで すすもう。せんの ちかくで とまるよ', 'senpai', 2600); break;
+      case 'tooFar': say('きゅうきゅうしゃ、いったね！ もうすこし まえの せんまで すすもう', 'senpai', 2600); break;
       case 'ambulance': audio.siren(0.3); say('サイレンだ！ きゅうきゅうしゃが くる。ひだりに よって とまろう！', 'senpai', 3200); break;
       case 'ambulancePass': if (e.ok) snapTake('ambulance', 'きゅうきゅうしゃに みちを ゆずった', 1500); break;
       case 'ambulanceDone':
@@ -1196,7 +1217,7 @@ function smilesHtml(r) {
     { img: 'kometa_happy', name: `ごはん ${GOHAN_BOWLS.toLocaleString()}<br>ぱいぶんの みんな`, on: true, heart: false },
   ];
   const n = people.filter((p) => p.on).length;
-  return `<div class="cert-smiles"><p>きょう えがおに した 人 <b>${n}</b>くみ</p><div class="cs-row">${people.map((p) => `<div class="cs ${p.on ? '' : 'off'}"><span class="face"><img src="${ART.IMG(p.img)}" alt="" draggable="false">${p.heart ? '<i>ていねい</i>' : ''}</span><small>${p.on ? p.name : p.off}</small></div>`).join('')}</div></div>`;
+  return `<div class="cert-smiles"><p>きょう えがおに した 人 <b>${n}</b>くみ</p><div class="cs-row">${people.map((p) => `<div class="cs ${p.on ? '' : 'off'}"><span class="face"><img src="${ART.IMG(p.img)}" alt="" draggable="false">${p.heart ? '<i>ていねい</i>' : ''}</span><small>${p.on ? p.name : (p.off || p.name)}</small></div>`).join('')}</div></div>`;
 }
 
 function dateText() { const d = new Date(); return `${d.getFullYear()}ねん ${d.getMonth() + 1}がつ ${d.getDate()}にち`; }

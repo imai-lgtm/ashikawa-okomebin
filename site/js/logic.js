@@ -27,6 +27,9 @@ export const CONFIG = {
     ambQuick: 2.2, // この秒数の うちに 止まれたら「すばやく ゆずった！」
     ambPass: 3.2, // 止まってから 救急車が 追いこして いくまでの 秒数
     zoneAccel: 0.4,
+    softBrake: 3.2, // ゆっくり 区間で 指を はなしたときの ブレーキ（ふだんは 7.5）
+    etcSoftFrom: 90, // 料金所の この距離（m）手前から ゆっくり 区間
+    etcTol: 1.4, // 料金所の 判定の ゆるさ（m/s。じそく20キロ ＋ 約5キロ まで OK）
     zoneBrakeAfter: 0.9, // スクールゾーンで 赤が この秒数 つづくと、先輩が ブレーキ // スクールゾーンの中の加速（ふだんの何倍か）
     zoneOver: 0.8, // スクールゾーン：制限より これ（m/s）以上 速いと「はやすぎ」に数える（指を はなすのが少し おくれても いいように）
     zoneGrades: [[0.4, 100, 'スクールゾーン ばっちり！'], [1.5, 60, 'スクールゾーン いいね！'], [3, 30, 'スクールゾーン OK'], [Infinity, 10, 'もうすこし ゆっくり']],
@@ -422,12 +425,15 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
       // スクールゾーンで 赤が つづいたので 先輩が ブレーキ（飛ばしても 早く つかない）
       D.v = Math.max(0, D.v - K.brake * dt);
       if (D.v <= D.zoneBrake) D.zoneBrake = null;
-    } else if (D.holding) {
-      // スクールゾーンの中は そっと加速する（指を はなすのが 少し おくれても 赤に なりにくい）
+    } else {
+      // ゆっくり 区間（スクールゾーン・料金所の 手前）は、加速も ブレーキも やさしく（指の おしはなしで 速さを たもちやすい）
       const inZone = (D.zones || []).some((z) => z.on && !z.done && D.s >= z.from - 4);
-      D.v = Math.min(D.vmax, D.v + K.accel * (inZone ? K.zoneAccel : 1) * dt);
+      const etcH = D.hazards.find((x) => x.type === 'etc' && x.active && !x.checked && x.at - D.s < K.etcSoftFrom);
+      const stopH = D.hazards.some((x) => x.active && x.type !== 'etc'); // 止まる線が 出ているときは ふつうの ブレーキ（止まれるように）
+      const soft = !stopH && (inZone || !!etcH);
+      if (D.holding) D.v = Math.min(D.vmax, D.v + K.accel * (soft ? K.zoneAccel : 1) * dt);
+      else D.v = Math.max(soft && D.v > 2.5 ? 2.5 : 0, D.v - (soft ? K.softBrake : K.brake) * dt); // ゆっくり 区間は 止まりきらない（はなしすぎても 進む）
     }
-    else D.v = Math.max(0, D.v - K.brake * dt);
     // 前にある、まだ終わっていない一番近い じゃま
     const h = D.hazards.find((x) => !x.cleared && x.at > D.s - 0.01);
     let limit = Infinity;
@@ -445,7 +451,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
       if (!h.checked && D.s + D.v * dt >= h.at - K.etcCheck) {
         h.checked = true;
         h.speed = D.v;
-        if (D.v <= h.slow) {
+        if (D.v <= h.slow + K.etcTol) {
           h.open = true; h.ok = true;
           addPoints(100, 'ETC ゆっくり OK！', 'drive');
           s.score.perfectStops += 1;
@@ -497,8 +503,9 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     const ambHold = D.amb && (D.amb.state === 'coming' || D.amb.state === 'passing'); // 救急車に ゆずって 止まっているあいだは、線で止まった ことにしない
     // 線から とおすぎる所で 止まっても、止まった ことにしない（もうすこし まえへ）
     // 救急車に ゆずった あと、まだ 走りだしていない あいだだけ（ふだんは 早めに 止まっても「はやめ」で OK）
-    if (D.afterAmb && D.v > 1) D.afterAmb = false;
-    const tooFar = D.afterAmb && h && h.active && h.type !== 'etc' && h.at - D.s > K.stopRange;
+    if (D.afterAmb && D.v <= K.stoppedSpeed) D.ambWaitT = (D.ambWaitT || 0) + dt;
+    if (D.afterAmb && (D.s - D.ambS > 0.8 || (h && h.at - D.s < 3) || D.ambWaitT > 4)) D.afterAmb = false; // 少し 進んだら（線の すぐ 手前・4秒 待ったら そのまま）ふつうに 判定（止まったまま 進めなく ならない） // 少し 進んだら（線の すぐ 手前なら そのまま）ふつうに 判定
+    const tooFar = D.afterAmb && h && h.active && h.type !== 'etc'; // 救急車に ゆずって 止まった あとは、走りだすまで 線の 判定を しない
     if (tooFar && D.v <= K.stoppedSpeed && !ambHold) { h.farT = (h.farT || 0) + dt; if (h.farT > 1.5 && !h.farSaid) { h.farSaid = true; emit('tooFar', { id: h.id }); } }
     if (h && h.active && h.type !== 'etc' && !ambHold && !tooFar) {
       if (D.v <= K.stoppedSpeed) {
@@ -569,7 +576,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
     } else if (a.state === 'passing' && a.t >= K.ambPass) {
       a.state = 'done';
       if (a.ok) { addPoints(a.quick ? C.points.ambulance : C.points.ambulance / 2, a.quick ? 'すばやく ゆずった！' : 'みちを ゆずった！', 'drive'); heart(5, 'ambulance'); }
-      D.afterAmb = true;
+      D.afterAmb = true; D.ambS = D.s;
       emit('ambulanceDone', { ok: a.ok });
     }
   }
@@ -702,6 +709,7 @@ export function createGame({ config = CONFIG, random = Math.random } = {}) {
       cardT: 0,
       cardSeconds: st.cardSeconds || 0,
       showCard: storeId === 'store2',
+      areaOrder: shuffle(st.areas, rnd), // 置き場所の ならびは 毎回 かわる（答えが いつも 左はし に ならない）
       misses: 0,
       hint: storeId === 'store1',
       gate: 0,
